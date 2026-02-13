@@ -1,0 +1,7 @@
+{
+  "name": "ILBC Pre-Music",
+  "description": "A professional media converter that transforms video and MP3 files into high-fidelity WAV format for the ILBC Pre-Music community.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
