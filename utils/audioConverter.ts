@@ -1,5 +1,5 @@
 
-export type OutputFormat = 'keyboard' | 'stereo';
+export type OutputFormat = 'stereo';
 
 export interface TrimOptions {
   start: number;
@@ -24,7 +24,7 @@ export async function convertMedia(
   const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
   const sampleRate = 44100;
-  const numChannels = format === 'keyboard' ? 1 : 2;
+  const numChannels = 2; // Fixed to Stereo as Keyboard (Mono) was removed
   
   // Calculate trim bounds
   let startOffset = 0;

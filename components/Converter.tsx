@@ -16,7 +16,7 @@ const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const Converter: React.FC<ConverterProps> = ({ onStart, onComplete, isConverting, isDarkMode }) => {
   const [file, setFile] = useState<File | null>(null);
   const [fileDuration, setFileDuration] = useState<number>(0);
-  const [targetFormat, setTargetFormat] = useState<OutputFormat>('keyboard');
+  const [targetFormat, setTargetFormat] = useState<OutputFormat>('stereo');
   const [progress, setProgress] = useState(0);
   const [log, setLog] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +31,6 @@ const Converter: React.FC<ConverterProps> = ({ onStart, onComplete, isConverting
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const formats: { id: OutputFormat; name: string; desc: string; speed: 'instant' }[] = [
-    { id: 'keyboard', name: 'Keyboard WAV', desc: 'Mono 44.1kHz 16bit', speed: 'instant' },
     { id: 'stereo', name: 'WAV Stereo', desc: '44.1kHz 16bit', speed: 'instant' },
   ];
 
@@ -274,7 +273,7 @@ const Converter: React.FC<ConverterProps> = ({ onStart, onComplete, isConverting
 
           <div className="space-y-4">
              <label className={`text-[11px] font-bold uppercase tracking-[0.15em] pl-1 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Output Quality</label>
-             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+             <div className="grid grid-cols-1 gap-4">
                {formats.map((f) => (
                  <button
                     key={f.id}
