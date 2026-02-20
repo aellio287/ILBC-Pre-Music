@@ -2,28 +2,31 @@ import React, { useState } from 'react';
 import Header from './components/Header';
 import Converter from './components/Converter';
 import GeminiPanel from './components/GeminiPanel';
-
-export interface ConvertedFileInfo {
-  url: string;
-  name: string;
-  duration: number;
-  size: number;
-  format: string;
-}
+import { Track } from './types';
 
 const App: React.FC = () => {
   const [isConverting, setIsConverting] = useState(false);
-  const [convertedFile, setConvertedFile] = useState<ConvertedFileInfo | null>(null);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [activeTrackId, setActiveTrackId] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
 
   const handleConversionStart = () => {
     setIsConverting(true);
-    setConvertedFile(null);
   };
 
-  const handleConversionComplete = (fileInfo: ConvertedFileInfo | null) => {
+  const handleConversionComplete = (trackId: string, result: any) => {
+    setTracks(prev => prev.map(t => t.id === trackId ? { ...t, status: 'done', progress: 100, result } : t));
     setIsConverting(false);
-    setConvertedFile(fileInfo);
+  };
+
+  const handleClearTracks = () => {
+    tracks.forEach(track => {
+      if (track.result?.url) {
+        URL.revokeObjectURL(track.result.url);
+      }
+    });
+    setTracks([]);
+    setActiveTrackId(null);
   };
 
   const toggleTheme = () => {
@@ -43,15 +46,25 @@ const App: React.FC = () => {
           <main className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             <div className="lg:col-span-8 flex flex-col gap-6">
               <Converter 
+                tracks={tracks}
+                setTracks={setTracks}
+                activeTrackId={activeTrackId}
+                setActiveTrackId={setActiveTrackId}
                 onStart={handleConversionStart} 
                 onComplete={handleConversionComplete}
+                onClear={handleClearTracks}
                 isConverting={isConverting}
                 isDarkMode={isDarkMode}
               />
             </div>
 
             <aside className="lg:col-span-4">
-              <GeminiPanel convertedFile={convertedFile} isDarkMode={isDarkMode} />
+              <GeminiPanel 
+                activeTrack={tracks.find(t => t.id === activeTrackId) || null}
+                setTracks={setTracks}
+                convertedFiles={tracks.filter(t => t.status === 'done' && t.result).map(t => t.result!)} 
+                isDarkMode={isDarkMode} 
+              />
             </aside>
           </main>
 
