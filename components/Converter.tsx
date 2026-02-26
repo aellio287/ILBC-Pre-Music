@@ -18,15 +18,17 @@ import {
   CheckCircle2,
   Download,
   Loader2,
-  List
+  List,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import FormatSelector from './FormatSelector';
 import AdvancedSettings from './AdvancedSettings';
-import TrimSlider from './TrimSlider';
 import DownloadAllButton from './DownloadAllButton';
 import FileItem, { QueueFile } from './FileItem';
 import AddNewTrack from './AddNewTrack';
+import TrimSlider from './TrimSlider';
+import ConvertedFileItem from './ConvertedFileItem';
 
 interface ConverterProps {
   tracks: Track[];
@@ -40,7 +42,7 @@ interface ConverterProps {
   isDarkMode: boolean;
 }
 
-const MAX_FILE_SIZE_MB = 150;
+const MAX_FILE_SIZE_MB = 1024;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const Converter: React.FC<ConverterProps> = ({ 
@@ -64,12 +66,13 @@ const Converter: React.FC<ConverterProps> = ({
   const [log, setLog] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  
-  // Trimming states removed (moved to GeminiPanel)
+  const [isTrimEnabled, setIsTrimEnabled] = useState(true);
+  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
   
   const activeFile = tracks.find(f => f.id === activeTrackId) || (tracks.length > 0 ? tracks[0] : null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -123,7 +126,7 @@ const Converter: React.FC<ConverterProps> = ({
         let sampleRate = 'Analyzing...';
         try {
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          if (selectedFile.size < 50 * 1024 * 1024) { // Increased limit to 50MB
+          if (selectedFile.size < 200 * 1024 * 1024) { // Increased limit to 200MB for analysis
             const arrayBuffer = await selectedFile.arrayBuffer();
             const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
             sampleRate = `${decodedBuffer.sampleRate} Hz`;
@@ -156,9 +159,28 @@ const Converter: React.FC<ConverterProps> = ({
   }, []);
 
   const addFilesToQueue = useCallback(async (newFiles: File[]) => {
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    newFiles.forEach(f => {
+      if (f.size > MAX_FILE_SIZE_BYTES) {
+        errors.push(`${f.name} is too large (max ${MAX_FILE_SIZE_MB}MB)`);
+      } else if (!f.type.startsWith('audio/') && !f.type.startsWith('video/')) {
+        errors.push(`${f.name} is not a valid audio or video file`);
+      } else {
+        validFiles.push(f);
+      }
+    });
+
+    if (errors.length > 0) {
+      setError(errors.join('. '));
+    }
+
+    if (validFiles.length === 0) return;
+
     // 1. Create unique IDs and initial objects immediately for responsive UI
-    const initialItems: Track[] = newFiles.map(f => ({
-      id: crypto.randomUUID(),
+    const initialItems: Track[] = validFiles.map(f => ({
+      id: typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
       file: f,
       displayName: f.name,
       metadata: null,
@@ -234,10 +256,13 @@ const Converter: React.FC<ConverterProps> = ({
     setIsQueueRunning(true);
     onStart();
     setError(null);
+    abortControllerRef.current = new AbortController();
 
     const waitingFiles = tracks.filter(f => f.status === 'waiting' || f.status === 'error');
     
     for (const item of waitingFiles) {
+      if (abortControllerRef.current.signal.aborted) break;
+
       setTracks(prev => prev.map(f => f.id === item.id ? { ...f, status: 'processing', progress: 10 } : f));
       setLog(`Processing: ${item.file.name}`);
 
@@ -246,9 +271,14 @@ const Converter: React.FC<ConverterProps> = ({
           ? { start: item.startTime, end: item.endTime } 
           : undefined;
 
-        const result = await convertMedia(item.file, targetFormat, audioSettings, trimOptions, (msg) => {
-          setLog(msg);
-        });
+        const result = await convertMedia(
+          item.file, 
+          targetFormat, 
+          audioSettings, 
+          trimOptions, 
+          (msg) => setLog(msg),
+          abortControllerRef.current.signal
+        );
 
         const url = URL.createObjectURL(result.blob);
         const namePart = item.displayName.includes('.') ? item.displayName.substring(0, item.displayName.lastIndexOf('.')) : item.displayName;
@@ -259,19 +289,34 @@ const Converter: React.FC<ConverterProps> = ({
           name,
           duration: result.duration,
           size: result.blob.size,
-          format: `${targetFormat} (${audioSettings.sampleRate/1000}kHz ${audioSettings.bitDepth}bit ${audioSettings.channelMode})`
+          format: `${targetFormat} (${audioSettings.sampleRate/1000}kHz ${audioSettings.bitDepth}bit ${audioSettings.channelMode})`,
+          originalFile: item.file,
+          startTime: item.startTime,
+          endTime: item.endTime,
+          originalDuration: item.duration
         };
 
         onComplete(item.id, convertedInfo);
 
       } catch (err: any) {
+        if (err.message === 'Aborted') {
+          setTracks(prev => prev.map(f => f.status === 'processing' ? { ...f, status: 'waiting' } : f));
+          break;
+        }
         console.error(err);
         setTracks(prev => prev.map(f => f.id === item.id ? { ...f, status: 'error', error: "Failed" } : f));
       }
     }
 
     setIsQueueRunning(false);
-    setLog('All tasks completed.');
+    setLog(abortControllerRef.current.signal.aborted ? 'Conversion stopped.' : 'All tasks completed.');
+    abortControllerRef.current = null;
+  };
+
+  const stopBatchConversion = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
   };
 
   const handleFormatChange = (format: OutputFormat) => {
@@ -323,22 +368,24 @@ const Converter: React.FC<ConverterProps> = ({
     }
   }, [addFilesToQueue]);
 
+  const isAnyTrimInvalid = tracks.some(t => t.status === 'waiting' && t.isTrimValid === false);
+  const convertedFiles = tracks.filter(t => t.status === 'done' && t.result).map(t => t.result!);
+
+  // Auto-expand the most recently converted file
+  useEffect(() => {
+    if (convertedFiles.length > 0 && !activePreviewId) {
+      setActivePreviewId(convertedFiles[convertedFiles.length - 1].url);
+    }
+  }, [convertedFiles.length, activePreviewId]);
+
   return (
-    <div className="flex flex-col gap-8">
-      <div className="glass-panel rounded-[2rem] p-8 flex flex-col gap-8 shadow-2xl transition-all duration-500">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <h2 className={`text-2xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Conversion Studio</h2>
-            {tracks.length > 0 && (
-              <div className={`px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 ${
-                isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600'
-              }`}>
-                <List className="w-3 h-3" />
-                {tracks.length} FILES IN QUEUE
-              </div>
-            )}
-          </div>
-          <p className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Batch process your media with precision</p>
+    <div className="flex flex-col gap-10 w-full max-w-4xl mx-auto">
+      <div className={`rounded-[2.5rem] p-8 lg:p-12 flex flex-col gap-10 shadow-xl transition-all duration-500 ${
+        isDarkMode ? 'bg-slate-900/50 backdrop-blur-xl' : 'bg-white/80 backdrop-blur-xl'
+      }`}>
+        <div className="flex flex-col gap-3 text-center">
+          <h2 className={`text-4xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Convert Your Audio Easily</h2>
+          <p className={`text-base font-medium ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Upload, trim, and download in just a few clicks.</p>
         </div>
 
         {tracks.length === 0 ? (
@@ -347,54 +394,133 @@ const Converter: React.FC<ConverterProps> = ({
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
-            className={`group cursor-pointer border-2 border-dashed rounded-[1.5rem] p-16 flex flex-col items-center gap-6 transition-all duration-300 ${
+            className={`group cursor-pointer rounded-[2.5rem] p-24 lg:p-32 flex flex-col items-center gap-8 transition-all duration-500 ${
               isDragging 
-                ? 'border-blue-500 bg-blue-500/10 scale-[1.02] shadow-[0_0_40px_rgba(59,130,246,0.1)]' 
+                ? 'bg-blue-500/10 scale-[1.02] shadow-[0_0_60px_rgba(59,130,246,0.1)]' 
                 : isDarkMode 
-                  ? 'border-slate-800 bg-slate-900/40 hover:border-blue-500/40 hover:bg-slate-900/60' 
-                  : 'border-slate-200 bg-white hover:border-blue-400 hover:shadow-lg hover:shadow-blue-500/5'
+                  ? 'bg-slate-800/30 hover:bg-slate-800/50' 
+                  : 'bg-slate-50 hover:bg-slate-100'
             }`}
           >
-            <div className={`w-20 h-20 rounded-3xl flex items-center justify-center transition-all duration-500 ${
-              isDragging ? 'bg-blue-500 rotate-12 scale-110' : isDarkMode ? 'bg-slate-800 group-hover:bg-slate-700' : 'bg-slate-50 group-hover:bg-blue-50'
+            <div className={`w-28 h-28 rounded-[2rem] flex items-center justify-center transition-all duration-700 ${
+              isDragging ? 'bg-blue-500 rotate-12 scale-110 shadow-2xl shadow-blue-500/40' : isDarkMode ? 'bg-slate-800 group-hover:bg-slate-700' : 'bg-white shadow-sm group-hover:shadow-md'
             }`}>
-              <Upload className={`w-10 h-10 ${isDragging ? 'text-white' : isDarkMode ? 'text-slate-500 group-hover:text-blue-400' : 'text-slate-400 group-hover:text-blue-500'}`} />
+              <Upload className={`w-14 h-14 transition-all duration-500 ${isDragging ? 'text-white' : isDarkMode ? 'text-slate-500 group-hover:text-blue-400' : 'text-slate-400 group-hover:text-blue-500'}`} />
             </div>
-            <div className="text-center space-y-1">
-              <p className={`text-xl font-semibold ${isDarkMode ? 'text-slate-200' : 'text-slate-700'}`}>Drop media here</p>
-              <p className="text-sm text-slate-500">Multiple files supported. Lightning fast.</p>
+            <div className="text-center space-y-2">
+              <p className={`text-2xl font-bold ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Upload your audio file to start</p>
+              <p className={`text-sm font-medium ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Drag and drop or click to browse. Multiple files supported.</p>
             </div>
             <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="video/*,audio/*" multiple />
           </div>
         ) : (
-          <div className="flex flex-col gap-8 animate-fade-in-up">
-            <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-              <AnimatePresence mode="popLayout">
-                {tracks.map((item) => (
-                  <FileItem
-                    key={item.id}
-                    item={item}
-                    isDarkMode={isDarkMode}
-                    isQueueRunning={isQueueRunning}
-                    isActive={activeTrackId === item.id || (activeTrackId === null && tracks[0]?.id === item.id)}
-                    onRemove={removeFromQueue}
-                    onClick={setActiveTrackId}
-                  />
-                ))}
-              </AnimatePresence>
+          <div className="flex flex-col gap-10 animate-fade-in-up">
+            {/* 1. Upload Section (File List) */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between px-2">
+                <h3 className={`text-sm font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {tracks.length === 1 ? 'Current File' : 'Current Files'}
+                </h3>
+                <div className={`px-3 py-1 rounded-full text-[11px] font-bold flex items-center gap-1.5 ${
+                  isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-600'
+                }`}>
+                  <List className="w-3 h-3" />
+                  {tracks.length} {tracks.length === 1 ? 'File' : 'Files'}
+                </div>
+              </div>
+              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                <AnimatePresence mode="popLayout">
+                  {tracks.map((item) => (
+                    <FileItem
+                      key={item.id}
+                      item={item}
+                      isDarkMode={isDarkMode}
+                      isQueueRunning={isQueueRunning}
+                      isActive={activeTrackId === item.id || (activeTrackId === null && tracks[0]?.id === item.id)}
+                      onRemove={removeFromQueue}
+                      onClick={setActiveTrackId}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+              {!isQueueRunning && (
+                <AddNewTrack 
+                  onFilesSelected={addFilesToQueue} 
+                  isDarkMode={isDarkMode} 
+                  disabled={isQueueRunning}
+                />
+              )}
             </div>
 
-            {!isQueueRunning && (
-              <AddNewTrack 
-                onFilesSelected={addFilesToQueue} 
-                isDarkMode={isDarkMode} 
-                disabled={isQueueRunning}
-              />
-            )}
+            {/* 2. Trim Section */}
+            <AnimatePresence mode="wait">
+              {activeFile && activeFile.status === 'waiting' && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className={`p-8 rounded-[2rem] space-y-6 shadow-sm ${
+                    isDarkMode ? 'bg-slate-800/40' : 'bg-slate-50/80'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                        isDarkMode ? 'bg-slate-800 text-blue-400' : 'bg-white text-blue-500 shadow-sm'
+                      }`}>
+                        <Scissors className="w-5 h-5" />
+                      </div>
+                      <div className="flex flex-col">
+                        <label className={`text-xs font-semibold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Precision Trim</label>
+                        <p className={`text-sm font-bold truncate max-w-[240px] ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>{activeFile.displayName}</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setIsTrimEnabled(!isTrimEnabled)}
+                      className={`text-xs font-bold px-5 py-2 rounded-full transition-all ${
+                        isTrimEnabled 
+                          ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' 
+                          : isDarkMode ? 'bg-slate-700 text-slate-400 hover:bg-slate-600' : 'bg-white text-slate-500 hover:bg-slate-50 shadow-sm'
+                      }`}
+                    >
+                      {isTrimEnabled ? 'Active' : 'Disabled'}
+                    </button>
+                  </div>
 
-            <div className="space-y-4">
-               <div className="flex items-center justify-between pl-1">
-                 <label className={`text-[11px] font-bold uppercase tracking-[0.15em] ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Output Format</label>
+                  {isTrimEnabled && (
+                    <div className="pt-2">
+                      {activeFile.duration > 0 ? (
+                        <TrimSlider
+                          file={activeFile.file}
+                          duration={activeFile.duration}
+                          start={activeFile.startTime}
+                          end={activeFile.endTime}
+                          onStartChange={(val) => setTracks(prev => prev.map(f => f.id === activeFile.id ? { ...f, startTime: val } : f))}
+                          onEndChange={(val) => setTracks(prev => prev.map(f => f.id === activeFile.id ? { ...f, endTime: val } : f))}
+                          onValidationChange={(isValid) => setTracks(prev => prev.map(f => f.id === activeFile.id ? { ...f, isTrimValid: isValid } : f))}
+                          isDarkMode={isDarkMode}
+                        />
+                      ) : (
+                        <div className={`h-48 rounded-[2rem] flex flex-col items-center justify-center gap-4 transition-all ${
+                          isDarkMode ? 'bg-slate-900/40' : 'bg-slate-100/50'
+                        }`}>
+                          <div className="w-10 h-10 border-4 border-blue-500/10 border-t-blue-500 rounded-full animate-spin" />
+                          <div className="flex flex-col items-center gap-1">
+                            <p className={`text-sm font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>Analyzing Audio...</p>
+                            <p className={`text-xs font-medium ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Extracting metadata and generating waveform</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* 3. Output Format Section */}
+            <div className="space-y-8">
+               <div className="flex items-center justify-between px-2">
+                 <label className={`text-sm font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Output Format</label>
                  <FormatSelector 
                    value={targetFormat} 
                    onChange={handleFormatChange} 
@@ -411,45 +537,101 @@ const Converter: React.FC<ConverterProps> = ({
                />
             </div>
 
-            {isQueueRunning && (
-              <div className="p-8 glass-panel rounded-3xl border border-blue-500/20 flex flex-col items-center gap-6 animate-fade-in-up">
-                <div className="relative">
-                  <div className="w-16 h-16 border-4 border-blue-500/10 border-t-blue-500 rounded-full animate-spin"></div>
-                </div>
-                <div className="text-center space-y-1 w-full overflow-hidden">
-                  <p className="text-lg font-bold gradient-text">Batch Processing...</p>
-                  <p className="text-xs font-mono text-slate-500 animate-pulse truncate px-4">{log || 'Preparing...'}</p>
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-2xl text-red-500 text-sm font-medium flex items-center gap-3 animate-fade-in-up">
-                <AlertCircle className="w-5 h-5 shrink-0" />
-                {error}
-              </div>
-            )}
-
-            {!isQueueRunning && tracks.some(f => f.status === 'waiting' || f.status === 'error') && (
-              <button 
-                onClick={startBatchConversion}
-                disabled={isQueueRunning}
-                className={`w-full py-5 rounded-2xl font-bold text-lg shadow-2xl transition-all flex items-center justify-center gap-3 group transform active:scale-[0.98] bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-blue-500/30 text-white`}
-              >
-                Convert {tracks.filter(f => f.status === 'waiting' || f.status === 'error').length} Files
-                <ChevronRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
-              </button>
-            )}
-
-            {!isQueueRunning && tracks.length > 0 && tracks.every(f => f.status === 'done') && (
-              <div className="space-y-4 animate-fade-in-up">
-                <div className={`p-6 rounded-2xl border flex flex-col items-center gap-3 text-center ${
-                  isDarkMode ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-emerald-50 border-emerald-200'
+            {/* 4. Convert Button */}
+            <div className="space-y-6 pt-4">
+              {isQueueRunning && (
+                <div className={`p-10 rounded-[2rem] flex flex-col items-center gap-6 shadow-sm ${
+                  isDarkMode ? 'bg-slate-800/40' : 'bg-slate-50/80'
                 }`}>
-                  <CheckCircle2 className="w-10 h-10 text-emerald-500" />
+                  <div className="relative">
+                    <div className="w-16 h-16 border-4 border-blue-500/10 border-t-blue-500 rounded-full animate-spin"></div>
+                  </div>
+                  <div className="text-center space-y-2 w-full overflow-hidden">
+                    <p className={`text-xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Converting your file…</p>
+                    <p className="text-sm font-medium text-slate-500 animate-pulse truncate px-4">Please wait a moment.</p>
+                  </div>
+                  
+                  <button 
+                    onClick={stopBatchConversion}
+                    className="mt-2 px-8 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl font-bold text-sm transition-all active:scale-95"
+                  >
+                    Stop Converting
+                  </button>
+                </div>
+              )}
+
+              {error && (
+                <div className="p-5 bg-red-500/5 rounded-2xl text-red-500 text-sm font-bold flex items-center gap-4 animate-fade-in-up">
+                  <AlertCircle className="w-6 h-6 shrink-0" />
+                  {error}
+                </div>
+              )}
+
+              {!isQueueRunning && tracks.some(f => f.status === 'waiting' || f.status === 'error') && (
+                <button 
+                  onClick={startBatchConversion}
+                  disabled={isQueueRunning || isAnyTrimInvalid}
+                  className={`w-full py-6 rounded-2xl font-bold text-xl shadow-xl transition-all flex items-center justify-center gap-3 group transform active:scale-[0.98] ${
+                    isAnyTrimInvalid 
+                      ? 'bg-slate-800 text-slate-600 cursor-not-allowed' 
+                      : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/20 text-white'
+                  }`}
+                >
+                  Convert {tracks.filter(f => f.status === 'waiting' || f.status === 'error').length} Files
+                  <ChevronRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
+                </button>
+              )}
+            </div>
+
+            {/* 5. Results Section */}
+            <AnimatePresence>
+              {convertedFiles.length > 0 && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="space-y-8 pt-10 border-t border-slate-800/10"
+                >
+                  <div className="flex items-center justify-between px-2">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                        isDarkMode ? 'bg-slate-800 text-blue-400' : 'bg-slate-50 text-blue-600'
+                      }`}>
+                        <AudioWaveform className="w-6 h-6" />
+                      </div>
+                      <h3 className={`text-sm font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Results</h3>
+                    </div>
+                    <span className="text-xs font-bold text-slate-500">
+                      {convertedFiles.length} {convertedFiles.length === 1 ? 'File' : 'Files'} Ready
+                    </span>
+                  </div>
+                  
+                  <div className="flex flex-col gap-4">
+                    {convertedFiles.map((file, index) => (
+                      <ConvertedFileItem 
+                        key={`${file.url}-${index}`} 
+                        file={file} 
+                        isDarkMode={isDarkMode} 
+                        isExpanded={activePreviewId === file.url}
+                        onToggle={() => setActivePreviewId(activePreviewId === file.url ? null : file.url)}
+                      />
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* 6. Final Actions Section */}
+            {!isQueueRunning && tracks.length > 0 && tracks.every(f => f.status === 'done') && (
+              <div className="space-y-6 animate-fade-in-up pt-10 border-t border-slate-800/10">
+                <div className={`p-8 rounded-[2rem] flex flex-col items-center gap-4 text-center shadow-sm ${
+                  isDarkMode ? 'bg-emerald-500/5' : 'bg-emerald-50/50'
+                }`}>
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                  </div>
                   <div>
-                    <h4 className={`text-lg font-bold ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>All Files Converted!</h4>
-                    <p className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Your batch is ready for download.</p>
+                    <h4 className={`text-xl font-bold ${isDarkMode ? 'text-emerald-400' : 'text-emerald-800'}`}>Conversion Complete</h4>
+                    <p className={`text-sm font-medium ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Your files are ready for download.</p>
                   </div>
                 </div>
 
@@ -463,13 +645,13 @@ const Converter: React.FC<ConverterProps> = ({
                 
                 <button 
                   onClick={clearQueue}
-                  className={`w-full py-5 rounded-2xl font-bold text-lg transition-all border-2 ${
+                  className={`w-full py-6 rounded-2xl font-bold text-lg transition-all ${
                     isDarkMode 
-                      ? 'bg-slate-800/50 hover:bg-slate-800 text-slate-300 border-slate-700/50' 
-                      : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-100 shadow-sm'
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' 
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                   }`}
                 >
-                  Clear Queue & Start New
+                  Start New Batch
                 </button>
               </div>
             )}

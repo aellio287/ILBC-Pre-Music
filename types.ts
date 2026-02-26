@@ -14,6 +14,10 @@ export interface ConvertedFileInfo {
   duration: number;
   size: number;
   format: string;
+  originalFile?: File;
+  startTime?: number;
+  endTime?: number;
+  originalDuration?: number;
 }
 
 export interface Track {

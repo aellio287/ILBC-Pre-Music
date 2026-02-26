@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ConvertedFileInfo } from '../types';
+import { ConvertedFileInfo, Track } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Music, 
@@ -16,8 +16,10 @@ import {
   X,
   ChevronDown,
   ChevronUp,
-  FileAudio as FileIcon
+  FileAudio as FileIcon,
+  Scissors
 } from 'lucide-react';
+import TrimSlider from './TrimSlider';
 
 interface ConvertedFileItemProps {
   file: ConvertedFileInfo;
@@ -264,6 +266,7 @@ const GeminiPanel: React.FC<GeminiPanelProps> = ({ activeTrack, setTracks, conve
               {isTrimEnabled && (
                 <div className="space-y-6 animate-fade-in-up">
                   <TrimSlider
+                    file={activeTrack.file}
                     duration={activeTrack.duration}
                     start={activeTrack.startTime}
                     end={activeTrack.endTime}

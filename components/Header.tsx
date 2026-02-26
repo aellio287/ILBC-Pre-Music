@@ -17,7 +17,6 @@ const Header: React.FC<HeaderProps> = ({ isDarkMode, toggleTheme }) => {
         </div>
         <div>
           <h1 className="text-2xl md:text-3xl font-bold gradient-text tracking-tight">ILBC Pre-Music</h1>
-          <p className={`${isDarkMode ? 'text-slate-400' : 'text-slate-500'} text-xs md:text-sm font-medium transition-colors`}>Convert audio to WAV instantly</p>
         </div>
       </div>
       

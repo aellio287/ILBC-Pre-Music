@@ -40,19 +40,19 @@ const AddNewTrack: React.FC<AddNewTrackProps> = ({ onFilesSelected, isDarkMode, 
         whileTap={{ scale: 0.99 }}
         onClick={handleButtonClick}
         disabled={disabled}
-        className={`w-full py-3 px-4 rounded-xl border-2 border-dashed transition-all flex items-center justify-center gap-2 group ${
+        className={`w-full py-4 px-4 rounded-2xl transition-all flex items-center justify-center gap-3 group shadow-sm ${
           isDarkMode 
-            ? 'border-slate-800 bg-slate-900/20 hover:border-blue-500/40 hover:bg-slate-900/40 text-slate-400 hover:text-blue-400' 
-            : 'border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50 text-slate-500 hover:text-blue-600'
+            ? 'bg-slate-800/40 hover:bg-slate-800/60 text-slate-400 hover:text-blue-400' 
+            : 'bg-white hover:bg-slate-50 text-slate-500 hover:text-blue-600 shadow-sm'
         } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       >
-        <div className={`p-1 rounded-lg transition-colors ${
-          isDarkMode ? 'bg-slate-800 group-hover:bg-blue-500/20' : 'bg-white group-hover:bg-blue-100'
+        <div className={`p-2 rounded-xl transition-colors ${
+          isDarkMode ? 'bg-slate-800 group-hover:bg-blue-500/10' : 'bg-slate-50 group-hover:bg-blue-50'
         }`}>
-          <Plus className="w-4 h-4" />
+          <Plus className="w-5 h-5" />
         </div>
-        <span className="text-sm font-bold tracking-tight">Add New Track</span>
-        <Music className="w-3.5 h-3.5 opacity-40 group-hover:opacity-100 transition-opacity" />
+        <span className="text-base font-bold tracking-tight">Add New Track</span>
+        <Music className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity" />
       </motion.button>
     </div>
   );
